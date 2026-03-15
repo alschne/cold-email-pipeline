@@ -128,11 +128,16 @@ def _build_mime_message(
     return msg
 
 
+# def _send_via_smtp(msg: MIMEMultipart, to_email: str) -> None:
+#     """Opens an SMTP connection and sends a single message."""
+#     with smtplib.SMTP(ZOHO_SMTP_HOST, ZOHO_SMTP_PORT) as server:
+#         server.ehlo()
+#         server.starttls()
+#         server.ehlo()
+#         server.login(ZOHO_EMAIL, ZOHO_APP_PASSWORD)
+#         server.sendmail(SENDER_EMAIL, to_email, msg.as_string())
 def _send_via_smtp(msg: MIMEMultipart, to_email: str) -> None:
-    """Opens an SMTP connection and sends a single message."""
-    with smtplib.SMTP(ZOHO_SMTP_HOST, ZOHO_SMTP_PORT) as server:
-        server.ehlo()
-        server.starttls()
+    with smtplib.SMTP_SSL(ZOHO_SMTP_HOST, ZOHO_SMTP_PORT) as server:
         server.ehlo()
         server.login(ZOHO_EMAIL, ZOHO_APP_PASSWORD)
         server.sendmail(SENDER_EMAIL, to_email, msg.as_string())

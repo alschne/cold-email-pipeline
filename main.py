@@ -27,6 +27,9 @@ Usage:
   python main.py --dry-run    # prints actions without sending
 """
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import argparse
 import logging
 import sys
@@ -80,6 +83,11 @@ def parse_args():
         "--dry-run",
         action="store_true",
         help="Print actions without sending emails or writing to sheet",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Run regardless of day (for testing)",
     )
     return parser.parse_args()
 
@@ -386,7 +394,7 @@ def step_send_initials(
 def run(dry_run: bool = False) -> None:
     run_date = today()
 
-    if not should_run_today(run_date):
+    if not should_run_today(run_date) and not args.force:
         logger.info(f"Today ({run_date}) is not a sending day. Exiting.")
         return
 

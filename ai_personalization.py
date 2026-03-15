@@ -33,18 +33,28 @@ _model = genai.GenerativeModel(GEMINI_MODEL)
 # ---------------------------------------------------------------------------
 
 _SYSTEM_CONSTRAINTS = """
-You are writing a single personalization line for a cold outreach email.
+You are writing a single personalization line for a cold outreach email from a compensation consultant.
 
 STRICT RULES — follow all of these without exception:
-- Write exactly 1–2 sentences. No more.
-- Do NOT mention specific revenue, headcount, funding, or any claim you
-  cannot verify — stick to observable, role-based pain.
-- Do NOT use hollow flattery ("I love what you're doing at...").
-- Do NOT mention the sender or their services — that comes later in the email.
-- Write in second person ("As a [role] at a growing [industry] company, you...").
-- The line must bridge naturally to compensation complexity as a pain point.
-- Use plain, direct language. No jargon. No exclamation marks.
+- Write 1 sentence. 2 sentences only if the second meaningfully adds to the first — never pad.
+- Write in second person ("As a [role]..." or "When you're..." or "At a company like...")
+- Name a specific, felt pain — something the reader would recognize from their own week
+- Do NOT use vague phrases like "manual overhead", "data behind them", "compensation complexity", "navigate", "leverage", or "optimize"
+- Do NOT mention the sender or their services — that comes later in the email
+- Do NOT make claims about the specific company you cannot verify
+- Do NOT say "HR company" — the industry field is the industry the company operates IN, not what the company does
+- The pain must connect naturally to compensation structure (pay decisions, benchmarking, retention, raises, incentives)
 - Output ONLY the personalization text. No preamble, no quotes, no explanation.
+
+Examples of GOOD personalization lines:
+- "When you're a founder making 30 hiring decisions a year, it's easy to end up with pay that made sense case-by-case but looks inconsistent the moment someone compares notes."
+- "At a growing manufacturing company, compensation decisions often fall to whoever has the most context — which means raises get decided in hallways and bonus structures get rebuilt every cycle."
+- "As an HR leader at a fast-growing firm, you're probably the person explaining pay decisions you didn't fully design — and defending numbers you're not totally confident in."
+
+Examples of BAD personalization lines (never write like these):
+- "You are likely navigating the friction of keeping pay models accurate while managing the data behind them." (vague, jargon-heavy)
+- "I love what [company] is doing in the [industry] space." (hollow flattery)
+- "As a leader at [company], you understand the importance of compensation." (says nothing)
 """
 
 
@@ -67,19 +77,19 @@ def generate_personalization(lead: Lead) -> Optional[str]:
 
     role_description = _role_description(role_level, title)
 
+
     prompt = f"""{_SYSTEM_CONSTRAINTS}
 
-Lead context:
-- Name: {first_name}
-- Company: {company}
-- Industry: {industry}
-- Role: {role_description}
+    Lead context:
+    - Company: {company}
+    - Industry: {industry}
+    - Role: {role_description}
 
-Write a 1–2 sentence personalization line for the opening of a cold email
-about compensation structure complexity. The line should acknowledge the
-specific challenge this type of person faces given their role and industry,
-without making any claims you cannot verify.
-"""
+    Write a 1–2 sentence personalization line for the opening of a cold email
+    about compensation structure. Name the specific pain this type of person
+    feels in their role and industry — something they would recognize from
+    their own week.
+    """
 
     return _call_gemini(prompt, lead)
 
@@ -109,18 +119,20 @@ def generate_nudge_personalization(lead: Lead) -> Optional[str]:
 
     prompt = f"""{_SYSTEM_CONSTRAINTS}
 
-Lead context:
-- Name: {first_name}
-- Company: {company}
-- Industry: {industry}
-- Role: {role_description}
+    Lead context:
+    - Company: {company}
+    - Industry: {industry}
+    - Role: {role_description}
 
-This is a final nudge email sent approximately 10 weeks after the initial
-outreach. The tone should be warm and low-pressure — almost a friendly
-check-in rather than another pitch. Write a 1–2 sentence personalization
-line that acknowledges time has passed and gently re-surfaces the
-compensation structure pain point without being pushy.
-"""
+    This is a final nudge sent approximately 10 weeks after the initial outreach.
+    The tone should be warm and low-pressure — a friendly check-in, not another pitch.
+    Write a 1–2 sentence personalization line that gently re-surfaces the
+    compensation pain point while acknowledging that time has passed.
+
+    Examples of GOOD nudge personalization:
+    - "A lot can change in a few months — new hires, a promotion cycle, maybe a conversation that made pay structure feel more urgent than it did before."
+    - "I know compensation structure isn't always top of mind until it suddenly is — a retention problem, a tough promotion conversation, or a new hire who asked hard questions."
+    """
 
     return _call_gemini(prompt, lead)
 

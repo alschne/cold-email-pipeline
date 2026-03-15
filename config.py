@@ -7,13 +7,13 @@ from datetime import date
 # ---------------------------------------------------------------------------
 ZOHO_EMAIL: str = os.environ["ZOHO_EMAIL"]
 ZOHO_APP_PASSWORD: str = os.environ["ZOHO_APP_PASSWORD"]
-ZOHO_SMTP_HOST: str = "smtp.zoho.com"
-ZOHO_SMTP_PORT: int = 587
-ZOHO_IMAP_HOST: str = "imap.zoho.com"
+ZOHO_SMTP_HOST: str = "smtppro.zoho.com"
+ZOHO_SMTP_PORT: int = 465
+ZOHO_IMAP_HOST: str = "imappro.zoho.com"
 ZOHO_IMAP_PORT: int = 993
 
 GEMINI_API_KEY: str = os.environ["GEMINI_API_KEY"]
-GEMINI_MODEL: str = "gemini-1.5-flash"
+GEMINI_MODEL: str = "gemini-2.0-flash"
 
 QEV_API_KEY: str = os.environ["QEV_API_KEY"]  # QuickEmailVerification
 QEV_BASE_URL: str = "https://api.quickemailverification.com/v1/verify"

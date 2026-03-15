@@ -13,7 +13,7 @@ ZOHO_IMAP_HOST: str = "imappro.zoho.com"
 ZOHO_IMAP_PORT: int = 993
 
 GEMINI_API_KEY: str = os.environ["GEMINI_API_KEY"]
-GEMINI_MODEL: str = "gemini-2.0-flash"
+GEMINI_MODEL: str = "gemini-flash-latest"
 
 QEV_API_KEY: str = os.environ["QEV_API_KEY"]  # QuickEmailVerification
 QEV_BASE_URL: str = "https://api.quickemailverification.com/v1/verify"

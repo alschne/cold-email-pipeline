@@ -1,0 +1,10 @@
+Hi {first_name},
+
+I know things get busy. Just checking in — is compensation structure something your team is evaluating this year?
+
+I specialize in helping growing {industry} companies build frameworks that make pay decisions clear, defensible, and sustainable to manage internally.
+
+{cta}
+
+Best,
+Allie

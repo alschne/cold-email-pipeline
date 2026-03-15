@@ -1,0 +1,12 @@
+Hi {first_name},
+
+{personalization}
+
+I've spent nearly a decade in compensation analytics, and I now work with growing {industry} companies to build structured, defensible compensation models their existing team can implement and run internally — no new hire or dedicated resource required. I come in, build the framework, and hand it off to your team.
+
+I recently completed a project for a 50-person manufacturing company — market-pricing 33 roles, identifying pay compression and retention risk, and redesigning their incentive and raise structure to align with market benchmarks. That kind of clarity is exactly what I help {industry} companies build for themselves.
+
+{cta}
+
+Best,
+Allie

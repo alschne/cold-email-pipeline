@@ -1,0 +1,12 @@
+Hi {first_name},
+
+Just wanted to follow up in case this got buried.
+
+{personalization}
+
+I help {role_context} build structured, market-aligned compensation models their existing teams can run internally — removing the guesswork from pay decisions without adding headcount.
+
+{cta}
+
+Best,
+Allie

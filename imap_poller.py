@@ -244,17 +244,25 @@ def poll_for_replies() -> dict[str, tuple[str, str]]:
 # Apply reply results to sheet
 # ---------------------------------------------------------------------------
 
-def update_sheet_with_replies(leads: list[Lead]) -> int:
+def update_sheet_with_replies(leads: list[Lead]) -> dict[str, int]:
     """
     Polls IMAP and updates the sheet for any leads that have received replies.
 
-    Returns count of leads updated.
+    Returns a dict with counts by reply type:
+      {replied, bounced, left_company, out_of_office}
     """
     reply_map = poll_for_replies()
-    if not reply_map:
-        return 0
 
-    updated = 0
+    counts = {
+        STATUS_REPLIED: 0,
+        STATUS_BOUNCED: 0,
+        STATUS_LEFT_COMPANY: 0,
+        STATUS_OUT_OF_OFFICE: 0,
+    }
+
+    if not reply_map:
+        return counts
+
     for lead in leads:
         message_id = lead.get("message_id", "").strip()
         if not message_id:
@@ -278,7 +286,7 @@ def update_sheet_with_replies(leads: list[Lead]) -> int:
                 fields["notes"] = f"{existing_notes}\n[OOO] {notes}".strip()
 
             update_lead_fields(lead, fields)
-            updated += 1
+            counts[reply_status] = counts.get(reply_status, 0) + 1
             logger.info(f"Updated row {lead.get('_row_number')} → {reply_status}")
 
-    return updated
+    return counts

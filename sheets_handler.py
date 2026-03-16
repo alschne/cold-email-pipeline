@@ -55,10 +55,25 @@ def _get_client() -> gspread.Client:
     return gspread.authorize(creds)
 
 
-def _get_sheet() -> gspread.Spreadsheet:
-    client = _get_client()
-    return client.open_by_key(GOOGLE_SHEET_ID)
+# def _get_sheet() -> gspread.Spreadsheet:
+#     client = _get_client()
+#     return client.open_by_key(GOOGLE_SHEET_ID)
+_sheet_cache = None
 
+def _get_sheet() -> gspread.Spreadsheet:
+    global _sheet_cache
+    if _sheet_cache is None:
+        client = _get_client()
+        _sheet_cache = client.open_by_key(GOOGLE_SHEET_ID)
+    return _sheet_cache
+
+_header_cache = None
+
+def _get_header(ws) -> list[str]:
+    global _header_cache
+    if _header_cache is None:
+        _header_cache = ws.row_values(1)
+    return _header_cache
 
 # ---------------------------------------------------------------------------
 # Config tab
@@ -211,7 +226,8 @@ def update_lead_fields(lead: Lead, fields: dict[str, Any]) -> None:
     """
     sheet = _get_sheet()
     ws = sheet.worksheet(LEADS_TAB)
-    header = ws.row_values(1)
+    # header = ws.row_values(1)
+    header = _get_header(ws)
     col_index = _build_col_index(header)
 
     row_num = lead["_row_number"]

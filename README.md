@@ -31,9 +31,10 @@ Google Sheet (leads, pattern_db, config tabs)
 ┌─────────────────────────────────────────────────────┐
 │  imap_poller.py      — Zoho IMAP reply detection    │
 │  email_generator.py  — pattern + QEV verification   │
-│  ai_personalization  — Gemini 2.0 Flash             │
+│  ai_personalization  — Gemini Flash                 │
 │  email_sender.py     — Zoho SMTP send               │
 │  sheets_handler.py   — all sheet read/write         │
+│  notifier.py         — daily summary email          │
 │  utils.py            — business day logic           │
 └─────────────────────────────────────────────────────┘
         ↕
@@ -48,7 +49,7 @@ Google Sheet (leads, pattern_db, config tabs)
 | Google Cloud Scheduler | Triggers the job Mon–Thu 9am MT | Free tier |
 | Google Secret Manager | Stores credentials securely | Free tier |
 | Zoho Mail | Sends and receives email via SMTP/IMAP | Existing paid plan |
-| Gemini 2.0 Flash | Generates personalization lines | Free tier (AI Studio) |
+| Gemini Flash (`gemini-flash-latest`) | Generates personalization lines | Free tier (AI Studio) |
 | QuickEmailVerification | Verifies email addresses before sending | Free tier (3,000/month) |
 
 ---
@@ -65,6 +66,7 @@ cold_email_pipeline/
 ├── ai_personalization.py     # Gemini prompts for personalization + nudge
 ├── email_sender.py           # SMTP send, template rendering, thread headers
 ├── imap_poller.py            # IMAP polling, reply classification
+├── notifier.py               # Daily summary email sent after each run
 ├── utils.py                  # Business day math, window logic, date helpers
 │
 ├── templates/
@@ -209,7 +211,28 @@ Threading works by storing the SMTP `Message-ID` from the initial send in the sh
 
 ---
 
-## Running Locally
+## Daily Notifications
+
+After every Mon–Thu run, the pipeline sends a summary email to `NOTIFICATION_EMAIL` (set in `config.py`) from your Zoho address. The email is sent regardless of whether anything was sent — a "nothing sent today" is just as useful as an active day.
+
+**Subject line:**
+- `Cold Email Summary — 5 sent` (when emails went out)
+- `Cold Email Summary — No sends today (Mon Mar 17)` (when nothing sent)
+
+**Summary includes:**
+- Emails sent broken down by type (initials, FU1, FU2, nudges, total vs daily limit)
+- Pipeline health (emails generated, verification failures, Gemini failures)
+- Reply activity detected that run (replies, bounces, left company, OOO)
+- Sheet health snapshot (total leads, queued, needs review, sequence complete)
+- Direct link to the Google Sheet
+
+Warnings (`⚠️`) appear inline if bounce rate is concerning, leads are running low, or Gemini/verification errors occurred. The notification email is never sent on non-sending days (Fri/Sat/Sun) or when the pipeline exits early.
+
+`NOTIFICATION_EMAIL` is a plain constant in `config.py` — not a secret, not in `.env`. Just update it directly in the file.
+
+---
+
+
 
 ```bash
 # Install dependencies

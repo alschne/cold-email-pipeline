@@ -10,9 +10,17 @@ Tab structure:
   - leads       : one row per lead, all pipeline columns
   - pattern_db  : domain → pattern lookup
   - config      : MAX_TOTAL, MIN_INITIALS_RESERVED
+
+Caching strategy:
+  All gspread client, spreadsheet, and worksheet objects are cached at the
+  module level for the duration of a single pipeline run. This avoids
+  repeated read requests to the Sheets API which would trigger 429 rate
+  limit errors at scale. The cache is process-scoped — Cloud Run spins up
+  a fresh process each run so there is no risk of stale data across runs.
 """
 
 import json
+import logging
 import os
 from typing import Any, Optional
 
@@ -26,6 +34,8 @@ from config import (
     PATTERN_DB_TAB,
     CONFIG_TAB,
 )
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Auth
@@ -44,52 +54,79 @@ def _get_client() -> gspread.Client:
     """
     sa_value = GOOGLE_SERVICE_ACCOUNT_JSON
 
-    # If the value looks like a file path and that file exists, use it
     if os.path.isfile(sa_value):
         creds = Credentials.from_service_account_file(sa_value, scopes=_SCOPES)
     else:
-        # Treat as a raw JSON string (Secret Manager injects this way)
         info = json.loads(sa_value)
         creds = Credentials.from_service_account_info(info, scopes=_SCOPES)
 
     return gspread.authorize(creds)
 
 
-# def _get_sheet() -> gspread.Spreadsheet:
-#     client = _get_client()
-#     return client.open_by_key(GOOGLE_SHEET_ID)
-_sheet_cache = None
+# ---------------------------------------------------------------------------
+# Module-level cache — one connection, one spreadsheet, three worksheets
+# for the entire pipeline run. Every sheet.worksheet() call is a read
+# request — caching eliminates all of them after the first.
+# ---------------------------------------------------------------------------
+
+_sheet_cache: Optional[gspread.Spreadsheet] = None
+_leads_ws_cache: Optional[gspread.Worksheet] = None
+_pattern_ws_cache: Optional[gspread.Worksheet] = None
+_config_ws_cache: Optional[gspread.Worksheet] = None
+_header_cache: Optional[list] = None
+
 
 def _get_sheet() -> gspread.Spreadsheet:
     global _sheet_cache
     if _sheet_cache is None:
         client = _get_client()
         _sheet_cache = client.open_by_key(GOOGLE_SHEET_ID)
+        logger.info("Sheets connection established")
     return _sheet_cache
 
-_header_cache = None
 
-def _get_header(ws) -> list[str]:
+def _get_leads_ws() -> gspread.Worksheet:
+    global _leads_ws_cache
+    if _leads_ws_cache is None:
+        _leads_ws_cache = _get_sheet().worksheet(LEADS_TAB)
+    return _leads_ws_cache
+
+
+def _get_pattern_ws() -> gspread.Worksheet:
+    global _pattern_ws_cache
+    if _pattern_ws_cache is None:
+        _pattern_ws_cache = _get_sheet().worksheet(PATTERN_DB_TAB)
+    return _pattern_ws_cache
+
+
+def _get_config_ws() -> gspread.Worksheet:
+    global _config_ws_cache
+    if _config_ws_cache is None:
+        _config_ws_cache = _get_sheet().worksheet(CONFIG_TAB)
+    return _config_ws_cache
+
+
+def _get_header() -> list:
     global _header_cache
     if _header_cache is None:
-        _header_cache = ws.row_values(1)
+        _header_cache = _get_leads_ws().row_values(1)
     return _header_cache
+
 
 # ---------------------------------------------------------------------------
 # Config tab
 # ---------------------------------------------------------------------------
 
-def get_config() -> dict[str, Any]:
+def get_config() -> dict:
     """
     Reads the config tab and returns a dict.
     Expected rows: key | value
     Returns MAX_TOTAL (int) and MIN_INITIALS_RESERVED (int).
     """
-    sheet = _get_sheet()
-    ws = sheet.worksheet(CONFIG_TAB)
+    ws = _get_config_ws()
     rows = ws.get_all_values()
 
-    config: dict[str, Any] = {}
+    config = {}
     for row in rows[1:]:  # skip header
         if len(row) >= 2 and row[0].strip():
             key = row[0].strip()
@@ -106,13 +143,12 @@ def get_config() -> dict[str, Any]:
 # Pattern DB tab
 # ---------------------------------------------------------------------------
 
-def get_pattern_db() -> dict[str, str]:
+def get_pattern_db() -> dict:
     """Returns {domain: pattern} from the pattern_db tab."""
-    sheet = _get_sheet()
-    ws = sheet.worksheet(PATTERN_DB_TAB)
+    ws = _get_pattern_ws()
     rows = ws.get_all_values()
 
-    db: dict[str, str] = {}
+    db = {}
     for row in rows[1:]:
         if len(row) >= 2 and row[0].strip():
             db[row[0].strip().lower()] = row[1].strip().lower()
@@ -120,9 +156,8 @@ def get_pattern_db() -> dict[str, str]:
 
 
 def upsert_pattern_db(domain: str, pattern: str) -> None:
-    """Adds or updates a domain → pattern entry."""
-    sheet = _get_sheet()
-    ws = sheet.worksheet(PATTERN_DB_TAB)
+    """Adds or updates a domain -> pattern entry."""
+    ws = _get_pattern_ws()
     rows = ws.get_all_values()
 
     domain = domain.strip().lower()
@@ -171,8 +206,8 @@ LEAD_COLUMNS = [
 ]
 
 
-def _build_col_index(header_row: list[str]) -> dict[str, int]:
-    """Maps column name → 0-based index from the actual sheet header row."""
+def _build_col_index(header_row: list) -> dict:
+    """Maps column name -> 0-based index from the actual sheet header row."""
     return {name.strip(): i for i, name in enumerate(header_row)}
 
 
@@ -188,13 +223,12 @@ class Lead(dict):
     pass
 
 
-def get_all_leads() -> list[Lead]:
+def get_all_leads() -> list:
     """
     Fetches all rows from the leads tab.
     Returns a list of Lead dicts with _row_number set.
     """
-    sheet = _get_sheet()
-    ws = sheet.worksheet(LEADS_TAB)
+    ws = _get_leads_ws()
     all_values = ws.get_all_values()
 
     if not all_values:
@@ -218,16 +252,14 @@ def get_all_leads() -> list[Lead]:
 # Leads tab — write
 # ---------------------------------------------------------------------------
 
-def update_lead_fields(lead: Lead, fields: dict[str, Any]) -> None:
+def update_lead_fields(lead: Lead, fields: dict) -> None:
     """
     Updates specific columns for a lead row.
     fields = {column_name: new_value}
-    Only writes cells that actually changed.
+    Batches all updates for the row into a single API call.
     """
-    sheet = _get_sheet()
-    ws = sheet.worksheet(LEADS_TAB)
-    # header = ws.row_values(1)
-    header = _get_header(ws)
+    ws = _get_leads_ws()
+    header = _get_header()
     col_index = _build_col_index(header)
 
     row_num = lead["_row_number"]
@@ -246,15 +278,14 @@ def update_lead_fields(lead: Lead, fields: dict[str, Any]) -> None:
         ws.batch_update(updates)
 
 
-def append_lead(lead_data: dict[str, Any]) -> None:
+def append_lead(lead_data: dict) -> None:
     """
     Appends a new row to the leads tab.
     lead_data keys must match LEAD_COLUMNS.
     Used primarily by the future leads-finding pipeline.
     """
-    sheet = _get_sheet()
-    ws = sheet.worksheet(LEADS_TAB)
-    header = ws.row_values(1)
+    ws = _get_leads_ws()
+    header = _get_header()
 
     row = [str(lead_data.get(col, "")) for col in header]
     ws.append_row(row)

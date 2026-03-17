@@ -6,12 +6,14 @@ Orchestrates the full cold email pipeline. Run this daily via Cloud Run.
 Execution order:
   1. Poll IMAP for replies / bounces — update sheet first so nothing
      sends to someone who already replied or bounced
-  2. Generate missing emails (pattern + verification)
-  3. Generate missing personalization lines
-  4. Derive and write subject_line + cta for new leads
-  5. Send follow-ups (priority — time-sensitive)
-  6. Send initial emails (fill remaining budget)
-  7. Log summary
+  2. Generate missing email addresses (all leads)
+  3. Derive static fields — subject_line, cta (all leads)
+  4. Calculate today's send budget
+  5. Identify exactly which leads are sending today (follow-ups + initials)
+  6. Generate personalization ONLY for today's senders — not all leads
+  7. Send follow-ups
+  8. Send initial emails
+  9. Send summary notification
 
 Budget logic:
   - MAX_TOTAL and MIN_INITIALS_RESERVED read from config tab in sheet
@@ -20,15 +22,15 @@ Budget logic:
   - At least MIN_INITIALS_RESERVED slots are always reserved for initials
     even on heavy follow-up days
   - Leads with reply_status set (replied/bounced/left_company) are skipped
-    for all sends
 
 Usage:
   python main.py              # normal run
   python main.py --dry-run    # prints actions without sending
+  python main.py --force      # run regardless of day (for testing)
 """
+
 from dotenv import load_dotenv
 load_dotenv()
-
 
 import argparse
 import logging
@@ -104,7 +106,7 @@ def should_run_today(run_date: date) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Step 1: Derive subject_line and cta for new leads
+# Derive static fields
 # ---------------------------------------------------------------------------
 
 def derive_static_fields(lead: Lead, dry_run: bool) -> None:
@@ -134,14 +136,14 @@ def derive_static_fields(lead: Lead, dry_run: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 2: Generate email address for leads that don't have one
+# Generate email addresses
 # ---------------------------------------------------------------------------
 
-def step_generate_emails(leads: list[Lead], dry_run: bool, summary: PipelineSummary) -> None:
+def step_generate_emails(leads: list, dry_run: bool, summary: PipelineSummary) -> None:
     logger.info("--- Step: Generate missing email addresses ---")
     for lead in leads:
         if lead.get("email", "").strip():
-            continue  # already has email
+            continue
 
         if dry_run:
             logger.info(f"[DRY RUN] Would generate email for row {lead.get('_row_number')}: "
@@ -149,7 +151,6 @@ def step_generate_emails(leads: list[Lead], dry_run: bool, summary: PipelineSumm
             continue
 
         email_addr, verif_result = generate_and_verify_email(lead)
-
         fields: dict = {"verification_result": verif_result}
 
         if email_addr:
@@ -170,47 +171,6 @@ def step_generate_emails(leads: list[Lead], dry_run: bool, summary: PipelineSumm
 
 
 # ---------------------------------------------------------------------------
-# Step 3: Generate personalization for leads that need it
-# ---------------------------------------------------------------------------
-
-def step_generate_personalization(leads: list[Lead], dry_run: bool, summary: PipelineSummary) -> None:
-    logger.info("--- Step: Generate missing personalization ---")
-    for lead in leads:
-        if lead.get("status") in (STATUS_NEEDS_REVIEW, STATUS_BOUNCED, STATUS_LEFT_COMPANY):
-            continue
-
-        needs_personalization = not lead.get("personalization", "").strip()
-        needs_nudge_personalization = (
-            not lead.get("personalization_nudge", "").strip()
-            and lead.get("nudge_target", "").strip()
-            and not lead.get("nudge_sent", "").strip()
-        )
-
-        if needs_personalization:
-            if dry_run:
-                logger.info(f"[DRY RUN] Would generate personalization for row {lead.get('_row_number')}")
-                continue
-            text = generate_personalization(lead)
-            if text:
-                update_lead_fields(lead, {"personalization": text})
-                lead["personalization"] = text
-            else:
-                logger.warning(f"Personalization generation failed for row {lead.get('_row_number')}")
-                summary.gemini_failures += 1
-
-        if needs_nudge_personalization:
-            if dry_run:
-                logger.info(f"[DRY RUN] Would generate nudge personalization for row {lead.get('_row_number')}")
-                continue
-            text = generate_nudge_personalization(lead)
-            if text:
-                update_lead_fields(lead, {"personalization_nudge": text})
-                lead["personalization_nudge"] = text
-            else:
-                summary.gemini_failures += 1
-
-
-# ---------------------------------------------------------------------------
 # Follow-up eligibility
 # ---------------------------------------------------------------------------
 
@@ -221,7 +181,7 @@ def _is_terminal(lead: Lead) -> bool:
     ) or lead.get("status", "").strip() in (STATUS_BOUNCED, STATUS_LEFT_COMPANY)
 
 
-def _get_due_followups(leads: list[Lead], run_date: date) -> list[tuple[Lead, int, int]]:
+def _get_due_followups(leads: list, run_date: date) -> list:
     """
     Returns list of (lead, followup_number, days_remaining) for all
     follow-ups that are due today or overdue.
@@ -249,7 +209,6 @@ def _get_due_followups(leads: list[Lead], run_date: date) -> list[tuple[Lead, in
                 due.append((lead, 1, remaining))
             elif not target and (is_within_window(date_sent, FU1_WINDOW, run_date)
                                   or is_past_window(date_sent, FU1_WINDOW, run_date)):
-                # Target not yet set — set it now and check eligibility
                 remaining = days_remaining_in_window(date_sent, FU1_WINDOW, run_date)
                 due.append((lead, 1, remaining))
 
@@ -281,29 +240,99 @@ def _get_due_followups(leads: list[Lead], run_date: date) -> list[tuple[Lead, in
     return due
 
 
+def _get_ready_initials(leads: list) -> list:
+    """Returns leads ready for initial send, in sheet order."""
+    return [
+        lead for lead in leads
+        if lead.get("status", "").strip() == STATUS_READY
+        and lead.get("email", "").strip()
+        and not _is_terminal(lead)
+    ]
+
+
 # ---------------------------------------------------------------------------
-# Step 4: Send follow-ups
+# Generate personalization — only for today's senders
+# ---------------------------------------------------------------------------
+
+def step_generate_personalization_for_senders(
+    todays_initials: list,
+    todays_nudges: list,
+    dry_run: bool,
+    summary: PipelineSummary,
+) -> None:
+    """
+    Generates personalization ONLY for leads that are actually sending today.
+
+    todays_initials: leads sending initial email today (need personalization)
+    todays_nudges:   leads sending nudge today (need personalization_nudge)
+
+    This keeps Gemini API calls to MAX_TOTAL per run rather than calling
+    for every lead in the sheet.
+    """
+    logger.info("--- Step: Generate personalization for today's senders ---")
+
+    for lead in todays_initials:
+        if lead.get("personalization", "").strip():
+            continue  # already has it
+
+        if dry_run:
+            logger.info(f"[DRY RUN] Would generate personalization for row {lead.get('_row_number')}")
+            continue
+
+        text = generate_personalization(lead)
+        if text:
+            update_lead_fields(lead, {"personalization": text})
+            lead["personalization"] = text
+            logger.info(f"Generated personalization for row {lead.get('_row_number')}")
+        else:
+            logger.warning(f"Personalization generation failed for row {lead.get('_row_number')}")
+            summary.gemini_failures += 1
+
+    for lead in todays_nudges:
+        if lead.get("personalization_nudge", "").strip():
+            continue  # already has it
+
+        if dry_run:
+            logger.info(f"[DRY RUN] Would generate nudge personalization for row {lead.get('_row_number')}")
+            continue
+
+        text = generate_nudge_personalization(lead)
+        if text:
+            update_lead_fields(lead, {"personalization_nudge": text})
+            lead["personalization_nudge"] = text
+            logger.info(f"Generated nudge personalization for row {lead.get('_row_number')}")
+        else:
+            logger.warning(f"Nudge personalization generation failed for row {lead.get('_row_number')}")
+            summary.gemini_failures += 1
+
+
+# ---------------------------------------------------------------------------
+# Send follow-ups
 # ---------------------------------------------------------------------------
 
 def step_send_followups(
-    leads: list[Lead],
+    leads: list,
     run_date: date,
     budget: int,
     dry_run: bool,
     summary: PipelineSummary,
-) -> int:
-    """Sends follow-ups in priority order. Returns count sent."""
+) -> tuple:
+    """
+    Sends follow-ups in priority order.
+    Returns (count_sent, nudge_leads_sent_today) where nudge_leads is
+    used to identify who needs nudge personalization generated.
+    """
     logger.info("--- Step: Send follow-ups ---")
     due = _get_due_followups(leads, run_date)
     sent = 0
+    nudge_leads = []
 
     for lead, fu_num, days_remaining in due:
         if sent >= budget:
             break
 
-        if fu_num == 3 and not lead.get("personalization_nudge", "").strip():
-            logger.warning(f"Skipping nudge for row {lead.get('_row_number')} — nudge personalization not ready")
-            continue
+        if fu_num == 3:
+            nudge_leads.append(lead)
 
         if dry_run:
             logger.info(
@@ -311,6 +340,12 @@ def step_send_followups(
                 f"(row {lead.get('_row_number')}, {days_remaining} days remaining in window)"
             )
             sent += 1
+            continue
+
+        # Skip nudge if personalization not ready (will be generated in next step
+        # on subsequent run — should not happen with new order of operations)
+        if fu_num == 3 and not lead.get("personalization_nudge", "").strip():
+            logger.warning(f"Skipping nudge for row {lead.get('_row_number')} — nudge personalization not ready")
             continue
 
         success = send_followup(lead, fu_num)
@@ -337,39 +372,34 @@ def step_send_followups(
             sent += 1
 
     logger.info(f"Follow-ups sent: {sent}")
-    return sent
+    return sent, nudge_leads
 
 
 # ---------------------------------------------------------------------------
-# Step 5: Send initial emails
+# Send initial emails
 # ---------------------------------------------------------------------------
-
-def _get_ready_initials(leads: list[Lead]) -> list[Lead]:
-    """Returns leads ready for initial send, in sheet order."""
-    return [
-        lead for lead in leads
-        if lead.get("status", "").strip() == STATUS_READY
-        and lead.get("email", "").strip()
-        and lead.get("personalization", "").strip()
-        and not _is_terminal(lead)
-    ]
-
 
 def step_send_initials(
-    leads: list[Lead],
+    leads: list,
     run_date: date,
     budget: int,
     dry_run: bool,
     summary: PipelineSummary,
-) -> int:
-    """Sends initial emails. Returns count sent."""
+) -> tuple:
+    """
+    Sends initial emails up to budget.
+    Returns (count_sent, leads_sent_today) where leads_sent_today is used
+    to identify who needs personalization generated.
+    """
     logger.info("--- Step: Send initial emails ---")
     ready = _get_ready_initials(leads)
     sent = 0
+    sent_leads = []
 
     for lead in ready:
         if sent >= budget:
             break
+        sent_leads.append(lead)
 
         if dry_run:
             logger.info(
@@ -377,6 +407,11 @@ def step_send_initials(
                 f"(row {lead.get('_row_number')})"
             )
             sent += 1
+            continue
+
+        # Skip if personalization missing (should not happen with new order)
+        if not lead.get("personalization", "").strip():
+            logger.warning(f"Skipping initial for row {lead.get('_row_number')} — personalization not ready")
             continue
 
         message_id = send_initial_email(lead)
@@ -394,7 +429,7 @@ def step_send_initials(
             summary.initials_sent += 1
 
     logger.info(f"Initial emails sent: {sent}")
-    return sent
+    return sent, sent_leads
 
 
 # ---------------------------------------------------------------------------
@@ -414,7 +449,6 @@ def run(dry_run: bool = False, force: bool = False) -> None:
     config = get_config()
     max_total = int(config.get("MAX_TOTAL", 5))
     min_initials_reserved = int(config.get("MIN_INITIALS_RESERVED", 2))
-
     logger.info(f"Config: MAX_TOTAL={max_total}, MIN_INITIALS_RESERVED={min_initials_reserved}")
 
     # Initialize summary
@@ -434,36 +468,56 @@ def run(dry_run: bool = False, force: bool = False) -> None:
         summary.new_out_of_office = reply_results.get(STATUS_OUT_OF_OFFICE, 0)
         total_reply_updates = sum(reply_results.values())
         logger.info(f"Reply statuses updated: {total_reply_updates}")
-        # Reload leads to reflect reply status updates
         leads = get_all_leads()
     else:
         logger.info("[DRY RUN] Skipping IMAP poll")
 
-    # Step 2 — Derive static fields (subject_line, cta)
+    # Step 2 — Derive static fields (subject_line, cta) for all leads
     for lead in leads:
         derive_static_fields(lead, dry_run)
 
-    # Step 3 — Generate missing emails
+    # Step 3 — Generate missing email addresses for all leads
     step_generate_emails(leads, dry_run, summary)
 
-    # Step 4 — Generate missing personalization
-    step_generate_personalization(leads, dry_run, summary)
-
-    # Budget calculation
+    # Step 4 — Calculate budget
     followup_budget = max(0, max_total - min_initials_reserved)
     initial_budget_floor = min(min_initials_reserved, max_total)
 
-    # Step 5 — Send follow-ups
-    followups_sent = step_send_followups(leads, run_date, followup_budget, dry_run, summary)
+    # Step 5 — Identify today's follow-up senders (for nudges, need personalization)
+    due_followups = _get_due_followups(leads, run_date)
+    todays_nudge_leads = [
+        lead for lead, fu_num, _ in due_followups[:followup_budget]
+        if fu_num == 3
+    ]
 
-    # Recalculate initial budget
+    # Step 6 — Identify today's initial senders
+    ready_initials = _get_ready_initials(leads)
+    # Calculate how many initial slots we'll have after follow-ups
+    estimated_followup_count = min(len(due_followups), followup_budget)
+    slots_remaining = max_total - estimated_followup_count
+    initial_budget = max(initial_budget_floor, slots_remaining)
+    initial_budget = min(initial_budget, max_total - estimated_followup_count)
+    todays_initial_leads = ready_initials[:initial_budget]
+
+    # Step 7 — Generate personalization ONLY for today's senders
+    step_generate_personalization_for_senders(
+        todays_initials=todays_initial_leads,
+        todays_nudges=todays_nudge_leads,
+        dry_run=dry_run,
+        summary=summary,
+    )
+
+    # Step 8 — Send follow-ups
+    followups_sent, _ = step_send_followups(leads, run_date, followup_budget, dry_run, summary)
+
+    # Step 9 — Recalculate initial budget based on actual follow-ups sent
     slots_used = followups_sent
     slots_remaining = max_total - slots_used
     initial_budget = max(initial_budget_floor, slots_remaining)
     initial_budget = min(initial_budget, max_total - slots_used)
 
-    # Step 6 — Send initials
-    initials_sent = step_send_initials(leads, run_date, initial_budget, dry_run, summary)
+    # Step 10 — Send initials
+    initials_sent, _ = step_send_initials(leads, run_date, initial_budget, dry_run, summary)
 
     total_sent = followups_sent + initials_sent
     logger.info(
@@ -471,7 +525,7 @@ def run(dry_run: bool = False, force: bool = False) -> None:
         f"(follow-ups: {followups_sent}, initials: {initials_sent})"
     )
 
-    # Step 7 — Snapshot sheet health and send summary notification
+    # Step 11 — Snapshot sheet health and send summary notification
     summary.snapshot_leads(leads)
     send_summary(summary, dry_run=dry_run)
 

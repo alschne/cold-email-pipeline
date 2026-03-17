@@ -81,6 +81,7 @@ def generate_personalization(lead: Lead) -> Optional[str]:
     prompt = f"""{_SYSTEM_CONSTRAINTS}
 
     Lead context:
+    - Name: {first_name}
     - Company: {company}
     - Industry: {industry}
     - Role: {role_description}
@@ -120,6 +121,7 @@ def generate_nudge_personalization(lead: Lead) -> Optional[str]:
     prompt = f"""{_SYSTEM_CONSTRAINTS}
 
     Lead context:
+    - Name: {first_name}
     - Company: {company}
     - Industry: {industry}
     - Role: {role_description}
@@ -162,6 +164,7 @@ def _call_gemini(prompt: str, lead: Lead) -> Optional[str]:
     """
     Calls Gemini and returns the response text.
     Returns None on any failure so the pipeline can handle gracefully.
+    Sleeps 4 seconds after each call to stay under the 15 RPM free tier limit.
     """
     try:
         response = _model.generate_content(prompt)
@@ -169,7 +172,9 @@ def _call_gemini(prompt: str, lead: Lead) -> Optional[str]:
         if not text:
             logger.warning(f"Empty Gemini response for row {lead.get('_row_number')}")
             return None
+        time.sleep(4)  # 4s sleep = max 15 calls/min, safely under free tier RPM limit
         return text
     except Exception as e:
         logger.error(f"Gemini error for row {lead.get('_row_number')}: {e}")
         return None
+ 

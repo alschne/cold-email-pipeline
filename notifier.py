@@ -29,6 +29,7 @@ from config import (
     SENDER_EMAIL,
     GOOGLE_SHEET_ID,
     NOTIFICATION_EMAIL,
+    NOTIFICATION_SENDER_NAME,
 )
 from sheets_handler import Lead
 
@@ -201,7 +202,7 @@ def send_summary(summary: PipelineSummary, dry_run: bool = False) -> None:
 
     try:
         msg = MIMEMultipart("alternative")
-        msg["From"] = formataddr((SENDER_NAME, SENDER_EMAIL))
+        msg["From"] = formataddr((NOTIFICATION_SENDER_NAME, SENDER_EMAIL))
         msg["To"] = NOTIFICATION_EMAIL
         msg["Subject"] = subject
         msg["Date"] = formatdate(localtime=True)

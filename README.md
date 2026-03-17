@@ -12,10 +12,13 @@ Every weekday morning (Monday–Thursday, 9am Mountain Time), a Cloud Run job fi
 
 1. **Polls your inbox** for replies, bounces, and out-of-office messages — updates the sheet before sending anything
 2. **Generates email addresses** for new leads using pattern detection and email verification
-3. **Generates personalization** for new leads using Gemini AI — a 1–2 sentence hook tailored to the lead's role and industry
-4. **Sends initial emails** to leads marked `ready_to_send`, up to the configured daily limit
-5. **Sends threaded follow-ups** to leads whose follow-up window is due — these appear as replies in the same email thread
-6. **Logs everything** back to the sheet — send dates, message IDs, statuses, reply detection
+3. **Derives static fields** — subject line and CTA for any new leads
+4. **Calculates today's send budget** and identifies exactly which leads are sending today
+5. **Generates personalization** via Gemini — only for today's senders, not every lead in the sheet
+6. **Sends threaded follow-ups** to leads whose follow-up window is due
+7. **Sends initial emails** to leads marked `ready_to_send`, up to the configured daily limit
+8. **Sends a summary email** to your personal inbox with send counts, reply activity, and sheet health
+9. **Logs everything** back to the sheet — send dates, message IDs, statuses, reply detection
 
 Your only manual task is adding leads to the sheet and occasionally bumping the daily send limit as your domain warms up.
 

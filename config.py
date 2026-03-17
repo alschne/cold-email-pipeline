@@ -26,12 +26,13 @@ GOOGLE_SERVICE_ACCOUNT_JSON: str = os.environ.get(
 # ---------------------------------------------------------------------------
 # Sender identity
 # ---------------------------------------------------------------------------
-SENDER_NAME: str = "Pipeline Monitor"
+SENDER_NAME: str = "Allie Roth"
 SENDER_EMAIL: str = ZOHO_EMAIL
 
 # Email address to receive daily pipeline summary notifications
 # This can be any email address — does not need to match ZOHO_EMAIL
 NOTIFICATION_EMAIL: str = "allieroth@alineanalytics.com"
+NOTIFICATION_SENDER_NAME: str = "Pipeline Monitor"
 
 # ---------------------------------------------------------------------------
 # Case study — hardcoded until you have more projects

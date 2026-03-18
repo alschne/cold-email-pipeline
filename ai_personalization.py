@@ -15,6 +15,7 @@ Gemini prompt is written tightly to avoid hallucinated claims.
 """
 
 import logging
+import time
 from typing import Optional
 
 import google.generativeai as genai

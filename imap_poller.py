@@ -185,6 +185,12 @@ def poll_for_replies() -> dict[str, tuple[str, str]]:
         logger.error(f"IMAP connection failed: {e}")
         return results
 
+    # Search window — 7 days back to catch any reply while avoiding
+    # scanning the entire inbox history on every run
+    from datetime import date, timedelta
+    since_date = (date.today() - timedelta(days=7)).strftime("%d-%b-%Y")
+    search_criteria = f'(SINCE "{since_date}")'
+
     # Folders to check — Zoho uses "INBOX" and may use "Junk" for bounces
     folders_to_check = ["INBOX", "Junk", "Spam"]
 
@@ -194,9 +200,8 @@ def poll_for_replies() -> dict[str, tuple[str, str]]:
             if status != "OK":
                 continue
 
-            # Search for all messages — we'll filter by In-Reply-To locally
-            # UNSEEN would miss replies that got auto-marked read
-            _, message_nums = conn.search(None, "ALL")
+            # Search only recent messages — avoids scanning full inbox history
+            _, message_nums = conn.search(None, search_criteria)
             if not message_nums or not message_nums[0]:
                 continue
 
